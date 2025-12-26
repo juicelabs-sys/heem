@@ -2,11 +2,10 @@
 <html lang="en">
 <head>
 <meta charset="utf-8"/>
-<meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>SYIFA — Cinematic Love Fireworks</title>
+<title>I Love U — Syifa Rahmadani</title>
 <style>
-  html,body{margin:0;background:#000;overflow:hidden}
-  canvas{display:block}
+html,body{margin:0;background:#000;overflow:hidden}
+canvas{display:block}
 </style>
 </head>
 <body>
@@ -16,363 +15,216 @@
 (() => {
 "use strict";
 
-/* =========================
-   SETTINGS (4K, no recording)
-========================= */
-// Render target: true 4K buffer for crisp output.
-// If too heavy, set RENDER_SCALE = 0.75 or 0.5.
+/* ================= CONFIG ================= */
 const TARGET_W = 3840;
 const TARGET_H = 2160;
-const RENDER_SCALE = 1;     // 1 = full 4K
+const RENDER_SCALE = 1;   // 1 = full 4K, try 0.75 / 0.5 if lag
 const FPS = 60;
-const DURATION_SEC = 15;
-const NAME = "SYIFA";
+const DURATION = 15;
 
-/* =========================
-   CANVAS + BUFFERS
-========================= */
+/* ================= CANVAS ================= */
 const canvas = document.getElementById("c");
-const ctx = canvas.getContext("2d", { alpha: false });
+const ctx = canvas.getContext("2d",{alpha:false});
 
 const W = Math.floor(TARGET_W * RENDER_SCALE);
 const H = Math.floor(TARGET_H * RENDER_SCALE);
+canvas.width=W; canvas.height=H;
+canvas.style.width="100vw";
+canvas.style.height="100vh";
 
-canvas.width = W;
-canvas.height = H;
-canvas.style.width = "100vw";
-canvas.style.height = "100vh";
+const hdr=document.createElement("canvas");
+hdr.width=W; hdr.height=H;
+const h=hdr.getContext("2d");
 
-// HDR-ish scene buffer
-const hdr = document.createElement("canvas");
-hdr.width = W; hdr.height = H;
-const h = hdr.getContext("2d");
+const bloom=document.createElement("canvas");
+bloom.width=W/4; bloom.height=H/4;
+const b=bloom.getContext("2d");
 
-// Bloom buffer (quarter res)
-const bloom = document.createElement("canvas");
-bloom.width = Math.max(2, (W/4)|0);
-bloom.height = Math.max(2, (H/4)|0);
-const b = bloom.getContext("2d");
+/* ================= MATH ================= */
+const TAU=Math.PI*2;
+const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
+const ease=x=>x<.5?4*x*x*x:1-Math.pow(-2*x+2,3)/2;
 
-/* =========================
-   MATH / HELPERS
-========================= */
-const TAU = Math.PI * 2;
-const clamp = (v,a,b)=>Math.max(a,Math.min(b,v));
+const heart=a=>({
+ x:16*Math.sin(a)**3,
+ y:-(13*Math.cos(a)-5*Math.cos(2*a)-2*Math.cos(3*a)-Math.cos(4*a))
+});
 
-function easeInOutCubic(x){
-  x = clamp(x,0,1);
-  return x < 0.5 ? 4*x*x*x : 1 - Math.pow(-2*x+2,3)/2;
-}
-function easeOutCubic(x){
-  x = clamp(x,0,1);
-  return 1 - Math.pow(1-x,3);
-}
+/* ================= COLORS ================= */
+const loveColor=t=>`rgb(${210+30*Math.sin(t)},${40+25*Math.sin(t+2)},${80+35*Math.sin(t+4)})`;
+const goldColor=t=>`rgb(255,${190+25*Math.sin(t)},${120+20*Math.sin(t+2)})`;
 
-function heart2D(a){
-  return {
-    x: 16 * Math.sin(a)**3,
-    y: -(13*Math.cos(a)-5*Math.cos(2*a)-2*Math.cos(3*a)-Math.cos(4*a))
-  };
-}
-
-function vignette(){
-  const g = ctx.createRadialGradient(W/2,H/2, Math.min(W,H)*0.12, W/2,H/2, Math.max(W,H)*0.62);
-  g.addColorStop(0, "rgba(0,0,0,0)");
-  g.addColorStop(1, "rgba(0,0,0,0.62)");
-  ctx.fillStyle = g;
-  ctx.fillRect(0,0,W,H);
-}
-
-/* =========================
-   CINEMATIC PALETTE
-========================= */
-function luxuryColor(t){
-  // deep crimson → champagne gold shift (subtle, not neon)
-  const r = (210 + 35*Math.sin(t*0.9))|0;
-  const g = ( 40 + 30*Math.sin(t*0.9 + 2.2))|0;
-  const b = ( 80 + 35*Math.sin(t*0.9 + 4.1))|0;
-  return `rgb(${r},${g},${b})`;
-}
-function goldColor(t){
-  const r = (255)|0;
-  const g = (190 + 25*Math.sin(t*0.7))|0;
-  const b = (120 + 20*Math.sin(t*0.7+2))|0;
-  return `rgb(${r},${g},${b})`;
-}
-
-/* =========================
-   DUST FIELD (background grandeur)
-========================= */
-const dust = Array.from({length: 1400}, () => ({
-  a: Math.random()*TAU,
-  r: 120 + Math.random()*720,
-  s: 0.0006 + Math.random()*0.0022,
-  z: Math.random(),           // depth-ish for size
-  sz: 0.6 + Math.random()*1.8
+/* ================= BACKGROUND ================= */
+const dust=[...Array(1400)].map(()=>({
+ a:Math.random()*TAU,
+ r:120+Math.random()*720,
+ s:0.0006+Math.random()*0.002,
+ z:Math.random(),
+ sz:0.6+Math.random()*1.8
 }));
 
 function drawDust(t){
-  h.save();
-  h.translate(W/2,H/2);
-  h.rotate(t*0.03);
-
-  for(const d of dust){
-    d.a += d.s;
-    const x = Math.cos(d.a) * d.r * (0.55 + d.z);
-    const y = Math.sin(d.a) * d.r * (0.40 + d.z);
-
-    const rad = d.sz * (0.5 + d.z) * (0.9 + 0.2*Math.sin(t + d.a));
-    h.beginPath();
-    h.arc(x,y,rad,0,TAU);
-    h.fillStyle = "rgba(170,70,220,0.08)";
-    h.fill();
-  }
-
-  h.restore();
+ h.save(); h.translate(W/2,H/2); h.rotate(t*0.03);
+ for(const d of dust){
+  d.a+=d.s;
+  h.beginPath();
+  h.arc(
+   Math.cos(d.a)*d.r*(0.5+d.z),
+   Math.sin(d.a)*d.r*(0.4+d.z),
+   d.sz*(0.6+d.z),0,TAU
+  );
+  h.fillStyle="rgba(180,80,220,.08)";
+  h.fill();
+ }
+ h.restore();
 }
 
-/* =========================
-   HEART CORE (opening → build-up)
-========================= */
-function drawHeartCore(t, phase){
-  // phase: 0..1 (build strength)
-  const k = easeInOutCubic(phase);
-  const pulse = (220 + 55*Math.sin(t*1.1)) * (0.2 + 0.8*k);
+/* ================= HEART CORE ================= */
+function drawHeart(t,p){
+ const k=ease(p);
+ const pulse=(230+60*Math.sin(t))*k;
+ const col=loveColor(t);
 
-  const col = luxuryColor(t);
-  const count = 1500;
-
-  for(let i=0;i<count;i++){
-    const a = (i/count)*TAU + t*0.25;
-    const p = heart2D(a);
-
-    const x = W/2 + p.x * pulse;
-    const y = H/2 + p.y * pulse;
-
-    h.beginPath();
-    h.arc(x,y, 3.4, 0, TAU);
-    h.fillStyle = col;
-    h.shadowColor = col;
-    h.shadowBlur = 36;
-    h.fill();
-  }
+ for(let i=0;i<1500;i++){
+  const a=i/1500*TAU+t*.25;
+  const p2=heart(a);
+  h.beginPath();
+  h.arc(W/2+p2.x*pulse,H/2+p2.y*pulse,3.5,0,TAU);
+  h.fillStyle=col;
+  h.shadowColor=col;
+  h.shadowBlur=36;
+  h.fill();
+ }
 }
 
-/* =========================
-   “ADULT” LOVE FIREWORKS (heart-shaped burst + embers)
-========================= */
-class Firework {
-  constructor(x,y,scale=1){
-    this.x=x; this.y=y;
-    this.age=0;
-    this.parts=[];
-    this.embers=[];
-    const n = 620;
-
-    for(let i=0;i<n;i++){
-      const a = (i/n)*TAU;
-      const p = heart2D(a);
-
-      // normalize + cinematic scaling
-      const vx = p.x * (0.060 * scale);
-      const vy = p.y * (0.060 * scale);
-
-      this.parts.push({
-        x,y,
-        vx,vy,
-        life: 120 + Math.random()*50,
-        tw: Math.random()*TAU
-      });
-
-      // embers: slower, falling, luxury sparkle
-      if(i % 3 === 0){
-        this.embers.push({
-          x,y,
-          vx: vx*0.35 + (Math.random()*0.6-0.3),
-          vy: vy*0.35 + (Math.random()*0.6-0.3),
-          life: 220 + Math.random()*120,
-          tw: Math.random()*TAU
-        });
-      }
-    }
+/* ================= FIREWORK ================= */
+class Firework{
+ constructor(){
+  this.p=[]; this.e=[]; this.life=0;
+  for(let i=0;i<600;i++){
+   const a=i/600*TAU;
+   const p=heart(a);
+   this.p.push({
+    x:W/2,y:H/2,
+    vx:p.x*0.06,vy:p.y*0.06,l:120+Math.random()*60
+   });
+   if(i%3===0){
+    this.e.push({
+     x:W/2,y:H/2,
+     vx:p.x*0.02+(Math.random()-.5),
+     vy:p.y*0.02+(Math.random()-.5),
+     l:260+Math.random()*120
+    });
+   }
   }
-
-  update(){
-    this.age++;
-    for(const p of this.parts){
-      p.x += p.vx;
-      p.y += p.vy;
-      p.vy += 0.0012;        // gentle gravity
-      p.vx *= 0.9992;        // air drag
-      p.life--;
-    }
-    for(const e of this.embers){
-      e.x += e.vx;
-      e.y += e.vy;
-      e.vy += 0.0016;
-      e.vx *= 0.9975;
-      e.life--;
-    }
+ }
+ update(){
+  this.life++;
+  for(const p of this.p){p.x+=p.vx;p.y+=p.vy;p.vy+=.001;p.l--;}
+  for(const e of this.e){e.x+=e.vx;e.y+=e.vy;e.vy+=.0016;e.l--;}
+ }
+ draw(t){
+  for(const p of this.p){
+   if(p.l<=0)continue;
+   h.beginPath();
+   h.arc(p.x,p.y,4.2,0,TAU);
+   h.fillStyle="rgba(255,220,170,.95)";
+   h.shadowColor="rgba(255,170,90,1)";
+   h.shadowBlur=70;
+   h.fill();
   }
-
-  draw(t){
-    const gold = goldColor(t);
-
-    // core burst (clean, bright, luxurious)
-    for(const p of this.parts){
-      if(p.life <= 0) continue;
-      const tw = 0.80 + 0.20*Math.sin(t*6 + p.tw);
-
-      h.beginPath();
-      h.arc(p.x,p.y, 4.0*tw, 0, TAU);
-      h.fillStyle = "rgba(255,220,170,0.95)";
-      h.shadowColor = "rgba(255,170,90,1)";
-      h.shadowBlur = 78;
-      h.fill();
-    }
-
-    // embers (long tail, classy)
-    for(const e of this.embers){
-      if(e.life <= 0) continue;
-      const a = clamp(e.life/320, 0, 1);
-      const tw = 0.65 + 0.35*Math.sin(t*4 + e.tw);
-
-      h.beginPath();
-      h.arc(e.x,e.y, 2.6*tw, 0, TAU);
-      h.fillStyle = `rgba(255,210,150,${0.55*a})`;
-      h.shadowColor = gold;
-      h.shadowBlur = 45;
-      h.fill();
-    }
+  for(const e of this.e){
+   if(e.l<=0)continue;
+   h.beginPath();
+   h.arc(e.x,e.y,2.6,0,TAU);
+   h.fillStyle=`rgba(255,210,150,${e.l/380})`;
+   h.shadowColor=goldColor(t);
+   h.shadowBlur=45;
+   h.fill();
   }
-
-  get dead(){
-    // dead when both sets are basically done
-    return this.age > 260;
-  }
+ }
+ dead(){return this.life>260}
 }
 
-let fireworks = [];
+let fireworks=[];
 
-/* =========================
-   BLOOM + COMPOSITE (bright enough)
-========================= */
+/* ================= POST ================= */
 function bloomPass(){
-  b.clearRect(0,0,bloom.width,bloom.height);
-  b.filter = "brightness(1.9) contrast(1.25) saturate(1.15) blur(14px)";
-  b.drawImage(hdr, 0,0, W,H, 0,0, bloom.width,bloom.height);
+ b.clearRect(0,0,bloom.width,bloom.height);
+ b.filter="brightness(1.9) contrast(1.25) blur(14px)";
+ b.drawImage(hdr,0,0,W,H,0,0,bloom.width,bloom.height);
 }
 
 function composite(){
-  ctx.clearRect(0,0,W,H);
-
-  // HDR-ish grading
-  ctx.filter = "brightness(1.10) contrast(1.24) saturate(1.28) hue-rotate(-6deg)";
-  ctx.drawImage(hdr,0,0);
-
-  // bloom add
-  ctx.globalCompositeOperation = "screen";
-  ctx.globalAlpha = 1.12;
-  ctx.filter = "brightness(1.10) contrast(1.05)";
-  ctx.drawImage(bloom, 0,0, bloom.width,bloom.height, 0,0, W,H);
-
-  // reset
-  ctx.globalAlpha = 1;
-  ctx.globalCompositeOperation = "source-over";
-  ctx.filter = "none";
-
-  vignette();
+ ctx.clearRect(0,0,W,H);
+ ctx.filter="brightness(1.1) contrast(1.24) saturate(1.28)";
+ ctx.drawImage(hdr,0,0);
+ ctx.globalCompositeOperation="screen";
+ ctx.globalAlpha=1.12;
+ ctx.drawImage(bloom,0,0,W,H);
+ ctx.globalCompositeOperation="source-over";
+ ctx.globalAlpha=1;
+ const g=ctx.createRadialGradient(W/2,H/2,300,W/2,H/2,1400);
+ g.addColorStop(0,"rgba(0,0,0,0)");
+ g.addColorStop(1,"rgba(0,0,0,.6)");
+ ctx.fillStyle=g; ctx.fillRect(0,0,W,H);
 }
 
-/* =========================
-   UI TEXT (ending only, always readable)
-========================= */
-function drawText(t, phase){
-  // phase 0..1
-  const a = easeOutCubic(phase);
+/* ================= TEXT ================= */
+function drawText(p){
+ ctx.save();
+ ctx.globalAlpha=p;
+ ctx.textAlign="center";
+ ctx.textBaseline="middle";
 
-  ctx.save();
-  ctx.globalAlpha = 0.95*a;
-  ctx.textAlign = "center";
-  ctx.textBaseline = "middle";
+ ctx.shadowColor="rgba(255,200,160,1)";
+ ctx.shadowBlur=50;
 
-  // classy glow (not bloom)
-  ctx.shadowColor = "rgba(255,200,160,1)";
-  ctx.shadowBlur = 55;
+ ctx.fillStyle="rgba(255,255,255,.92)";
+ ctx.font=`800 ${90*RENDER_SCALE}px system-ui`;
+ ctx.fillText("I Love U",W/2,H*0.74);
 
-  ctx.fillStyle = "rgba(255,255,255,0.94)";
-  ctx.font = `900 ${Math.floor(170*RENDER_SCALE)}px "Playfair Display", Georgia, serif`;
-  ctx.fillText(NAME, W/2, H*0.82);
+ ctx.shadowBlur=60;
+ ctx.font=`900 ${170*RENDER_SCALE}px Georgia`;
+ ctx.fillText("Syifa Rahmadani",W/2,H*0.82);
 
-  ctx.shadowBlur = 22;
-  ctx.fillStyle = "rgba(255,255,255,0.55)";
-  ctx.font = `500 ${Math.floor(22*RENDER_SCALE)}px system-ui,-apple-system,Segoe UI,Roboto`;
-  ctx.fillText("— with love —", W/2, H*0.82 + 95*RENDER_SCALE);
+ ctx.shadowBlur=20;
+ ctx.font=`600 ${22*RENDER_SCALE}px system-ui`;
+ ctx.fillStyle="rgba(255,255,255,.55)";
+ ctx.fillText("Dev by Tuan Muda Reza",W/2,H*0.82+105*RENDER_SCALE);
 
-  ctx.restore();
+ ctx.restore();
 }
 
-/* =========================
-   CINEMATIC TIMELINE
-========================= */
-let frame = 0;
-
+/* ================= LOOP ================= */
+let frame=0;
 function loop(){
-  const t = frame / FPS;
+ const t=frame/FPS;
 
-  // --- Scene persistence (NOT too dark)
-  h.fillStyle = "rgba(0,0,0,0.06)";
-  h.fillRect(0,0,W,H);
+ // persistent clear
+ h.fillStyle="rgba(0,0,0,.06)";
+ h.fillRect(0,0,W,H);
+ h.globalAlpha=.25;
+ h.fillStyle="rgba(70,10,20,.35)";
+ h.fillRect(0,0,W,H);
+ h.globalAlpha=1;
 
-  // ambient lift (prevents “nothing visible”)
-  h.save();
-  h.globalAlpha = 0.25;
-  h.fillStyle = "rgba(70,10,20,0.35)";
-  h.fillRect(0,0,W,H);
-  h.restore();
+ drawDust(t);
 
-  // Background grandeur
-  drawDust(t);
+ if(t>2) drawHeart(t,clamp((t-2)/4,0,1));
 
-  // OPENING (0–4): ambience + soft hints
-  // BUILD (4–7): heart forms
-  const heartPhase = (t - 4) / 3; // 0..1
-  if(t > 2.0) drawHeartCore(t, clamp((t-2.0)/5.0, 0, 1)); // early hint + full build
+ if(t>7&&t<12&&frame%90===0) fireworks.push(new Firework());
+ fireworks.forEach(f=>{f.update();f.draw(t)});
+ fireworks=fireworks.filter(f=>!f.dead());
 
-  // CLIMAX (7–12): luxury heart fireworks sequence
-  if(t >= 7 && t < 12){
-    // schedule bursts: tasteful pacing, not spam
-    // bursts at 7.2, 8.6, 10.0, 11.2
-    const beats = [7.2, 8.6, 10.0, 11.2];
-    for(const bt of beats){
-      if(Math.abs(t - bt) < (1/FPS)*0.5){
-        const s = 0.85 + 0.25*Math.random();
-        fireworks.push(new Firework(W/2, H/2, s));
-      }
-    }
-  }
+ bloomPass();
+ composite();
 
-  // Update fireworks
-  for(const f of fireworks){ f.update(); f.draw(t); }
-  fireworks = fireworks.filter(f => !f.dead);
+ if(t>12) drawText(ease((t-12)/2));
 
-  // Post
-  bloomPass();
-  composite();
-
-  // ENDING (12–15): name reveal
-  if(t >= 12){
-    drawText(t, clamp((t-12)/2.2, 0, 1));
-  }
-
-  frame++;
-  if(frame < DURATION_SEC * FPS){
-    requestAnimationFrame(loop);
-  } else {
-    // hold last frame (no loop)
-  }
+ frame++;
+ if(frame<DURATION*FPS) requestAnimationFrame(loop);
 }
-
 requestAnimationFrame(loop);
 })();
 </script>
