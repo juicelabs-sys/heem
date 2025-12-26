@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Galaxy Heart — Bloom + HDR Grade + 3D Parallax</title>
+<style>
+  html,body{margin:0;background:#000;overflow:hidden}
+  canvas{display:block}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+
+<script>
+/* =========================================================
+   Utils
+========================================================= */
+const TAU = Math.PI * 2;
+const clamp = (v,a,b)=>Math.max(a,Math.min(b,v));
+const lerp  = (a,b,t)=>a+(b-a)*t;
+
+class Vec3 {
+  constructor(x=0,y=0,z=0){this.x=x;this.y=y;this.z=z}
+  set(x,y,z){this.x=x;this.y=y;this.z=z; return this}
+  copy(v){this.x=v.x;this.y=v.y;this.z=v.z; return this}
+}
+
+function heart2D(a){
+  return {
+    x: 16 * Math.sin(a)**3,
+    y: -(13*Math.cos(a)-5*Math.cos(2*a)-2*Math.cos(3*a)-Math.cos(4*a))
+  };
+}
+
+/* =========================================================
+   Engine + Offscreen Pipeline (HDR buffer + Bloom buffers)
+========================================================= */
+const canvas = document.getElementById("c");
+const ctx = canvas.getContext("2d");
+
+const hdr = document.createElement("canvas");  // render scene here
+const hctx = hdr.getContext("2d");
+
+const bloomA = document.createElement("canvas"); // downsampled
+const bctxA  = bloomA.getContext("2d");
+
+const bloomB = document.createElement("canvas"); // blur ping-pong
+const bctxB  = bloomB.getContext("2d");
+
+const DPR = ()=>Math.min(2, devicePixelRatio || 1);
+
+let W=0,H=0,CX=0,CY=0, dpr=1;
+function resize(){
+  dpr = DPR();
+  W = canvas.width  = Math.floor(innerWidth  * dpr);
+  H = canvas.height = Math.floor(innerHeight * dpr);
+  canvas.style.width  = innerWidth+"px";
+  canvas.style.height = innerHeight+"px";
+  CX = W*0.5; CY = H*0.5;
+
+  hdr.width=W; hdr.height=H;
+
+  // bloom at quarter res (cheap + nice)
+  bloomA.width = bloomB.width = Math.max(2, (W/4)|0);
+  bloomA.height= bloomB.height= Math.max(2, (H/4)|0);
+}
+resize();
+addEventListener("resize", resize);
+
+/* =========================================================
+   Camera (true 3D parallax)
+========================================================= */
+const camera = {
+  yaw: 0, pitch: 0,
+  yawT: 0, pitchT: 0,
+  dist: 7.5,        // camera distance
+  fov: 520,         // projection strength
+};
+
+let mouseX=0, mouseY=0;
+addEventListener("pointermove",(e)=>{
+  const x = (e.clientX / innerWidth  - 0.5);
+  const y = (e.clientY / innerHeight - 0.5);
+  mouseX = x; mouseY = y;
+  camera.yawT   = x * 0.65;
+  camera.pitchT = y * 0.45;
+},{passive:true});
+
+function project(v3){
+  // rotate around Y then X (yaw/pitch)
+  const cy = Math.cos(camera.yaw),  sy = Math.sin(camera.yaw);
+  const cx = Math.cos(camera.pitch),sx = Math.sin(camera.pitch);
+
+  let x = v3.x, y = v3.y, z = v3.z;
+
+  // yaw (Y-axis)
+  let x1 = x*cy + z*sy;
+  let z1 = -x*sy + z*cy;
+
+  // pitch (X-axis)
+  let y2 = y*cx - z1*sx;
+  let z2 = y*sx + z1*cx;
+
+  // perspective
+  const zz = (z2 + camera.dist);
+  const p  = camera.fov / Math.max(0.001, zz);
+
+  return {
+    x: CX + x1 * p,
+    y: CY + y2 * p,
+    s: p,            // scale factor
+    z: zz            // depth for sorting if needed
+  };
+}
+
+/* =========================================================
+   Systems: Nebula + Heart Particles (3D)
+========================================================= */
+class Particle {
+  constructor(){
+    this.a=0; this.r=0; this.z=0;
+    this.life=0;
+    this.size=1;
+    this.spin=0;
+  }
+  reset(){
+    this.a = Math.random()*TAU;
+    this.r = Math.random();
+    this.z = (Math.random()*2-1);      // [-1..1] depth band
+    this.life = 520 + Math.random()*520;
+    this.size = 0.9 + Math.random()*2.2;
+    this.spin = 0.012 + Math.random()*0.02;
+  }
+}
+
+class Pool {
+  constructor(max){
+    this.pool = Array.from({length:max},()=>new Particle());
+    this.active = [];
+  }
+  spawn(n=1){
+    while(n-- && this.pool.length){
+      const p=this.pool.pop();
+      p.reset();
+      this.active.push(p);
+    }
+  }
+  update(fn){
+    for(let i=this.active.length-1;i>=0;i--){
+      const p=this.active[i];
+      fn(p);
+      if(--p.life<=0){
+        this.pool.push(p);
+        this.active.splice(i,1);
+      }
+    }
+  }
+}
+
+const hearts = new Pool(2000);
+
+const nebula = Array.from({length:1100},()=>({
+  a: Math.random()*TAU,
+  r: Math.random()*520 + 60,
+  z: Math.random()*2 - 1,           // [-1..1]
+  s: 0.0008 + Math.random()*0.0022,
+  sz: 0.6 + Math.random()*1.8
+}));
+
+/* =========================================================
+   Bloom Pass (downsample + multi-blur + additive)
+========================================================= */
+function bloomPass(){
+  const bw = bloomA.width, bh = bloomA.height;
+
+  // downsample HDR → bloomA, keep only “bright-ish” feel via filter
+  bctxA.save();
+  bctxA.clearRect(0,0,bw,bh);
+  bctxA.filter = "brightness(1.35) contrast(1.15) saturate(1.1)";
+  bctxA.drawImage(hdr, 0,0,W,H, 0,0,bw,bh);
+  bctxA.restore();
+
+  // blur ping-pong (cheap gaussian-ish)
+  // pass 1
+  bctxB.save();
+  bctxB.clearRect(0,0,bw,bh);
+  bctxB.filter = "blur(10px)";
+  bctxB.globalAlpha = 0.95;
+  bctxB.drawImage(bloomA,0,0);
+  bctxB.restore();
+
+  // pass 2 (bigger + softer)
+  bctxA.save();
+  bctxA.clearRect(0,0,bw,bh);
+  bctxA.filter = "blur(18px)";
+  bctxA.globalAlpha = 0.85;
+  bctxA.drawImage(bloomB,0,0);
+  bctxA.restore();
+
+  // pass 3 (tiny sharpen back by blending original downsample)
+  bctxA.save();
+  bctxA.filter = "blur(6px)";
+  bctxA.globalAlpha = 0.65;
+  bctxA.drawImage(bloomB,0,0);
+  bctxA.restore();
+}
+
+/* =========================================================
+   Final Composite (HDR-ish grade + vignette + grain)
+========================================================= */
+function vignette(){
+  const g = ctx.createRadialGradient(CX,CY, Math.min(W,H)*0.15, CX,CY, Math.max(W,H)*0.62);
+  g.addColorStop(0, "rgba(0,0,0,0)");
+  g.addColorStop(1, "rgba(0,0,0,0.55)");
+  ctx.fillStyle = g;
+  ctx.fillRect(0,0,W,H);
+}
+
+function grain(t){
+  // super light grain (cheap)
+  ctx.save();
+  ctx.globalAlpha = 0.06;
+  ctx.globalCompositeOperation = "overlay";
+  const s = 220 * dpr;
+  const x = (Math.sin(t*1.7)*0.5+0.5) * (W-s);
+  const y = (Math.cos(t*1.3)*0.5+0.5) * (H-s);
+  ctx.fillStyle = "#808080";
+  ctx.fillRect(x,y,s,s);
+  ctx.restore();
+}
+
+function compositeFinal(t){
+  // 1) Base HDR buffer to screen with “HDR-ish” grading (Canvas filter stack)
+  ctx.save();
+  ctx.clearRect(0,0,W,H);
+
+  // HDR-ish: slight lift + contrast + saturate + tiny hue shift
+  ctx.filter = "brightness(1.08) contrast(1.18) saturate(1.22) hue-rotate(-6deg)";
+  ctx.drawImage(hdr,0,0);
+  ctx.restore();
+
+  // 2) Bloom add
+  ctx.save();
+  ctx.globalCompositeOperation = "screen"; // or "lighter" for stronger
+  ctx.globalAlpha = 0.85;
+  ctx.filter = "brightness(1.2) contrast(1.05)";
+  ctx.drawImage(bloomA, 0,0,bloomA.width,bloomA.height, 0,0,W,H);
+  ctx.restore();
+
+  // 3) Vignette + grain
+  vignette();
+  grain(t);
+}
+
+/* =========================================================
+   Render Scene into HDR buffer (3D)
+========================================================= */
+let t=0;
+let textAlpha=0;
+
+function drawNebula(t, color){
+  // soft trail on HDR
+  hctx.fillStyle = "rgba(0,0,0,0.18)";
+  hctx.fillRect(0,0,W,H);
+
+  // subtle background tint fog
+  hctx.save();
+  hctx.globalAlpha = 0.35;
+  hctx.fillStyle = "rgba(80,20,120,0.06)";
+  hctx.fillRect(0,0,W,H);
+  hctx.restore();
+
+  // draw nebula particles in 3D
+  for(const n of nebula){
+    n.a += n.s;
+    const x = Math.cos(n.a) * n.r;
+    const y = Math.sin(n.a) * n.r;
+    const z = n.z * 4.2; // depth spread
+
+    const P = project({x, y: y*0.75, z});
+    const rad = n.sz * (0.9 + n.z*0.2) * P.s;
+
+    hctx.beginPath();
+    hctx.arc(P.x, P.y, rad, 0, TAU);
+    hctx.fillStyle = "rgba(180,80,255,0.10)";
+    hctx.fill();
+  }
+}
+
+function drawHearts(t, color){
+  if(hearts.active.length < 1500) hearts.spawn(6);
+
+  hearts.update(p=>{
+    p.a += p.spin;
+    p.z += Math.sin(t)*0.0006; // breathing depth drift
+
+    const h = heart2D(p.a);
+    const pulse = 22 + Math.sin(t)*7;
+    // Build a true 3D point: heart in XY + depth from particle
+    const baseX = h.x * pulse * p.r;
+    const baseY = h.y * pulse * p.r;
+
+    const v = new Vec3(
+      baseX,
+      baseY,
+      p.z * 6.0
+    );
+
+    const P = project(v);
+    const r = p.size * P.s;
+
+    hctx.beginPath();
+    hctx.arc(P.x, P.y, r, 0, TAU);
+    hctx.fillStyle = color;
+    hctx.shadowColor = color;
+    hctx.shadowBlur = 22 * P.s;
+    hctx.fill();
+  });
+}
+
+function drawText(color){
+  textAlpha = Math.min(1, textAlpha + 0.002);
+
+  hctx.save();
+  hctx.globalAlpha = textAlpha;
+  hctx.font = `${Math.floor(64*dpr)}px system-ui, -apple-system, Segoe UI, Roboto`;
+  hctx.textAlign = "center";
+  hctx.fillStyle = color;
+  hctx.shadowColor = color;
+  hctx.shadowBlur = 40 * dpr;
+  hctx.fillText("I Love You", CX, CY + 220*dpr);
+  hctx.restore();
+}
+
+/* =========================================================
+   Loop
+========================================================= */
+function frame(){
+  // smooth camera toward targets (parallax)
+  camera.yaw   = lerp(camera.yaw,   camera.yawT,   0.06);
+  camera.pitch = lerp(camera.pitch, camera.pitchT, 0.06);
+
+  // breathing color
+  const rr = (200 + 55*Math.sin(t))|0;
+  const gg = ( 80 + 80*Math.sin(t+2))|0;
+  const bb = (200 + 55*Math.sin(t+4))|0;
+  const color = `rgb(${rr},${gg},${bb})`;
+
+  drawNebula(t, color);
+  drawHearts(t, color);
+  drawText(color);
+
+  bloomPass();
+  compositeFinal(t);
+
+  t += 0.035;
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
