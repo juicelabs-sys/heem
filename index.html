@@ -2,115 +2,145 @@
 <html lang="en">
 <head>
 <meta charset="utf-8"/>
-<title>SYIFA — Love Fireworks (4K)</title>
+<title>SYIFA — Cinematic Love Fireworks (4K)</title>
 <style>
 html,body{margin:0;background:#000;overflow:hidden}
 canvas{display:block}
-#rec{
- position:fixed;left:20px;top:20px;
- padding:10px 16px;border-radius:14px;
- background:rgba(0,0,0,.4);color:#fff;
- border:1px solid rgba(255,255,255,.12);
- cursor:pointer;font:600 14px system-ui
+#btn{
+ position:fixed;left:24px;top:24px;
+ padding:12px 18px;border-radius:14px;
+ background:rgba(0,0,0,.45);
+ color:#fff;border:1px solid rgba(255,255,255,.15);
+ font:600 14px system-ui;cursor:pointer
 }
 </style>
 </head>
 <body>
 <canvas id="c"></canvas>
-<button id="rec">Start 4K Recording</button>
+<button id="btn">START RECORD (4K)</button>
 
 <script>
 (() => {
 "use strict";
 
 /* ================= CONFIG ================= */
-const DURATION = 15;           // seconds
-const FPS = 60;
-const W = 3840, H = 2160;      // TRUE 4K
-const NAME = "SYIFA";
+const W=3840, H=2160;
+const FPS=60, DURATION=15;
+const NAME="SYIFA";
 
 /* ================= CANVAS ================= */
-const canvas = document.getElementById("c");
-const ctx = canvas.getContext("2d");
+const canvas=document.getElementById("c");
+const ctx=canvas.getContext("2d");
 canvas.width=W; canvas.height=H;
 
-const hdr = document.createElement("canvas");
+const hdr=document.createElement("canvas");
 hdr.width=W; hdr.height=H;
-const h = hdr.getContext("2d");
+const h=hdr.getContext("2d");
 
-const bloom = document.createElement("canvas");
+const bloom=document.createElement("canvas");
 bloom.width=W/4; bloom.height=H/4;
-const b = bloom.getContext("2d");
+const b=bloom.getContext("2d");
 
 /* ================= MATH ================= */
 const TAU=Math.PI*2;
-const heart = a => ({
+const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
+
+const heart=a=>({
  x:16*Math.sin(a)**3,
  y:-(13*Math.cos(a)-5*Math.cos(2*a)-2*Math.cos(3*a)-Math.cos(4*a))
 });
 
+/* ================= TIMELINE ================= */
+let frame=0;
+const tsec=()=>frame/FPS;
+
 /* ================= FIREWORK ================= */
 class Firework{
  constructor(x,y){
-  this.x=x; this.y=y;
-  this.t=0;
-  this.parts=[];
-  for(let i=0;i<420;i++){
-   const a=i/420*TAU;
+  this.p=[];
+  this.life=0;
+  for(let i=0;i<520;i++){
+   const a=i/520*TAU;
    const hrt=heart(a);
-   this.parts.push({
-    x:x,y:y,
-    vx:hrt.x*0.045,
-    vy:hrt.y*0.045,
-    life:120+Math.random()*40
+   this.p.push({
+    x,y,
+    vx:hrt.x*0.055,
+    vy:hrt.y*0.055,
+    l:120+Math.random()*50
    });
   }
  }
  update(){
-  this.t++;
-  for(const p of this.parts){
+  this.life++;
+  for(const p of this.p){
    p.x+=p.vx;
    p.y+=p.vy;
-   p.vy+=0.0006;
-   p.life--;
+   p.vy+=0.001;
+   p.l--;
   }
  }
  draw(){
-  for(const p of this.parts){
-   if(p.life<=0)continue;
+  for(const p of this.p){
+   if(p.l<=0)continue;
    h.beginPath();
-   h.arc(p.x,p.y,2.2,0,TAU);
-   h.fillStyle="rgba(255,180,120,.9)";
-   h.shadowColor="rgba(255,120,80,1)";
-   h.shadowBlur=30;
+   h.arc(p.x,p.y,4.2,0,TAU);
+   h.fillStyle="rgba(255,210,150,.95)";
+   h.shadowColor="rgba(255,170,90,1)";
+   h.shadowBlur=70;
    h.fill();
   }
  }
 }
 
-/* ================= SYSTEM ================= */
 let fireworks=[];
-let t=0;
+
+/* ================= DRAW ================= */
+function clearHDR(){
+ h.fillStyle="rgba(0,0,0,.06)";
+ h.fillRect(0,0,W,H);
+
+ // cinematic ambient lift
+ h.save();
+ h.globalAlpha=.25;
+ h.fillStyle="rgba(70,10,20,.35)";
+ h.fillRect(0,0,W,H);
+ h.restore();
+}
 
 function drawHeartCore(){
- const pulse=160+Math.sin(t*0.04)*40;
- for(let i=0;i<1200;i++){
-  const a=i/1200*TAU+t*0.002;
+ const t=tsec();
+ if(t<4)return;
+
+ const k=clamp((t-4)/3,0,1);
+ const pulse=240+Math.sin(frame*0.04)*60;
+
+ for(let i=0;i<1400;i++){
+  const a=i/1400*TAU+frame*0.002;
   const hrt=heart(a);
-  const x=W/2+hrt.x*pulse;
-  const y=H/2+hrt.y*pulse;
+  const x=W/2+hrt.x*pulse*k;
+  const y=H/2+hrt.y*pulse*k;
+
   h.beginPath();
-  h.arc(x,y,2,0,TAU);
-  h.fillStyle="rgba(220,40,60,.8)";
-  h.shadowColor="rgba(255,80,120,1)";
-  h.shadowBlur=22;
+  h.arc(x,y,3.6,0,TAU);
+  h.fillStyle="rgba(230,60,80,.9)";
+  h.shadowColor="rgba(255,100,140,1)";
+  h.shadowBlur=34;
   h.fill();
  }
 }
 
+function drawFireworks(){
+ const t=tsec();
+ if(t>7 && t<12 && frame%90===0){
+  fireworks.push(new Firework(W/2,H/2));
+ }
+ fireworks.forEach(f=>{f.update();f.draw();});
+ fireworks=fireworks.filter(f=>f.life<150);
+}
+
 function bloomPass(){
  b.clearRect(0,0,bloom.width,bloom.height);
- b.filter="blur(18px)";
+ b.filter="brightness(1.8) contrast(1.25)";
  b.drawImage(hdr,0,0,bloom.width,bloom.height);
 }
 
@@ -118,60 +148,63 @@ function composite(){
  ctx.clearRect(0,0,W,H);
  ctx.filter="contrast(1.25) saturate(1.3)";
  ctx.drawImage(hdr,0,0);
+
  ctx.globalCompositeOperation="screen";
+ ctx.globalAlpha=1.1;
  ctx.drawImage(bloom,0,0,W,H);
  ctx.globalCompositeOperation="source-over";
+
+ // vignette
+ const g=ctx.createRadialGradient(W/2,H/2,300,W/2,H/2,1400);
+ g.addColorStop(0,"rgba(0,0,0,0)");
+ g.addColorStop(1,"rgba(0,0,0,.55)");
+ ctx.fillStyle=g;
+ ctx.fillRect(0,0,W,H);
 }
 
-/* ================= TEXT ================= */
 function drawText(){
+ const t=tsec();
+ if(t<12)return;
+
  ctx.save();
- ctx.font="900 160px Playfair Display, serif";
+ ctx.globalAlpha=clamp((t-12)/2,0,1);
+ ctx.font="900 170px Playfair Display, serif";
  ctx.textAlign="center";
- ctx.fillStyle="rgba(255,255,255,.92)";
- ctx.shadowColor="rgba(255,180,120,1)";
- ctx.shadowBlur=40;
+ ctx.fillStyle="rgba(255,255,255,.95)";
+ ctx.shadowColor="rgba(255,190,140,1)";
+ ctx.shadowBlur=50;
  ctx.fillText(NAME,W/2,H*0.82);
  ctx.restore();
 }
 
 /* ================= LOOP ================= */
-function frame(){
- h.fillStyle="rgba(0,0,0,.15)";
- h.fillRect(0,0,W,H);
-
+function loop(){
+ clearHDR();
  drawHeartCore();
-
- if(t%180===0){
-  fireworks.push(new Firework(W/2,H/2));
- }
-
- fireworks.forEach(f=>{f.update();f.draw();});
- fireworks=fireworks.filter(f=>f.t<160);
-
+ drawFireworks();
  bloomPass();
  composite();
  drawText();
 
- t++;
- if(t< DURATION*FPS) requestAnimationFrame(frame);
+ frame++;
+ if(frame<DURATION*FPS) requestAnimationFrame(loop);
 }
 
 /* ================= RECORD ================= */
-document.getElementById("rec").onclick=()=>{
+document.getElementById("btn").onclick=()=>{
  const stream=canvas.captureStream(FPS);
- const rec=new MediaRecorder(stream,{videoBitsPerSecond:25_000_000});
+ const rec=new MediaRecorder(stream,{videoBitsPerSecond:30_000_000});
  const data=[];
  rec.ondataavailable=e=>data.push(e.data);
  rec.onstop=()=>{
   const blob=new Blob(data,{type:"video/webm"});
   const a=document.createElement("a");
   a.href=URL.createObjectURL(blob);
-  a.download="SYIFA_LOVE_4K.webm";
+  a.download="SYIFA_CINEMATIC_LOVE_4K.webm";
   a.click();
  };
  rec.start();
- frame();
+ loop();
  setTimeout(()=>rec.stop(),DURATION*1000);
 };
 })();
